@@ -1,0 +1,38 @@
+scope: nexus
+name: pg1
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: pg1:8008
+consul:
+  host: consul:8500
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    postgresql:
+      use_pg_rewind: true
+      parameters:
+        max_connections: '100'
+  initdb:
+    - encoding: UTF8
+    - locale: en_US.UTF-8
+  users:
+    postgres:
+      password: postgres
+      options:
+        - createdb
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: pg1:5432
+  data_dir: /var/lib/postgresql/data
+  bin_dir: /usr/lib/postgresql/15/bin
+  parameters:
+    unix_socket_directories: '/tmp'
+  authentication:
+    replication:
+      username: replicator
+      password: replicatorpass
+    superuser:
+      username: postgres
+      password: postgres

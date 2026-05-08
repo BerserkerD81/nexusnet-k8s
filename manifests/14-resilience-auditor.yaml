@@ -1,0 +1,314 @@
+###############################################################################
+# Servicio de Auditoria de Resiliencia
+# Expone /health y /report para demostrar en clase:
+# - replicacion/tolerancia (StatefulSets/Deployments/HPA/PDB)
+# - recuperacion ante desastres (CronJobs)
+# - seguridad multinivel (NetworkPolicies)
+# - orquestacion/automatizacion (Kubernetes + probes)
+###############################################################################
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: resilience-auditor
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: resilience-auditor-read
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: resilience-auditor-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: resilience-auditor-read
+subjects:
+  - kind: ServiceAccount
+    name: resilience-auditor
+    namespace: default
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: resilience-auditor-script
+  namespace: default
+data:
+  server.js: |
+    const fs = require("fs");
+    const https = require("https");
+    const http = require("http");
+
+    const host = process.env.KUBERNETES_SERVICE_HOST;
+    const port = process.env.KUBERNETES_SERVICE_PORT || "443";
+    const tokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+    const caPath = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
+
+    let token = "";
+    let ca = "";
+    try {
+      token = fs.readFileSync(tokenPath, "utf8").trim();
+      ca = fs.readFileSync(caPath);
+    } catch (e) {
+      console.error("Cannot read serviceaccount credentials", e.message);
+    }
+
+    function k8sGet(path) {
+      return new Promise((resolve) => {
+        const req = https.request(
+          {
+            host,
+            port,
+            path,
+            method: "GET",
+            ca,
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/json",
+            },
+            timeout: 5000,
+          },
+          (res) => {
+            let data = "";
+            res.on("data", (chunk) => (data += chunk));
+            res.on("end", () => {
+              if (res.statusCode >= 200 && res.statusCode < 300) {
+                try {
+                  resolve({ ok: true, status: res.statusCode, body: JSON.parse(data) });
+                } catch (e) {
+                  resolve({ ok: false, status: res.statusCode, error: "invalid-json" });
+                }
+              } else {
+                resolve({ ok: false, status: res.statusCode, error: data.slice(0, 200) });
+              }
+            });
+          }
+        );
+        req.on("error", (err) => resolve({ ok: false, error: err.message }));
+        req.on("timeout", () => {
+          req.destroy(new Error("timeout"));
+        });
+        req.end();
+      });
+    }
+
+    function summarizeReplica(obj) {
+      if (!obj || !obj.spec || !obj.status) {
+        return { desired: 0, ready: 0, healthy: false };
+      }
+      const desired = Number(obj.spec.replicas || 0);
+      const ready = Number(obj.status.readyReplicas || 0);
+      return { desired, ready, healthy: desired > 0 && ready >= Math.min(desired, 1) };
+    }
+
+    async function collectReport() {
+      const [
+        apiDep,
+        frontendDep,
+        postgresSts,
+        redisSts,
+        hpa,
+        pdbApi,
+        pdbFrontend,
+        cronjobs,
+        npDefault,
+        npMonitoring,
+        npVault,
+        vaultSts,
+        grafanaDep,
+        prometheusDep,
+      ] = await Promise.all([
+        k8sGet("/apis/apps/v1/namespaces/default/deployments/nexusnet-api"),
+        k8sGet("/apis/apps/v1/namespaces/default/deployments/nexusnet-frontend"),
+        k8sGet("/apis/apps/v1/namespaces/default/statefulsets/postgres"),
+        k8sGet("/apis/apps/v1/namespaces/default/statefulsets/redis-master"),
+        k8sGet("/apis/autoscaling/v2/namespaces/default/horizontalpodautoscalers/nexusnet-api-hpa"),
+        k8sGet("/apis/policy/v1/namespaces/default/poddisruptionbudgets/nexusnet-api-pdb"),
+        k8sGet("/apis/policy/v1/namespaces/default/poddisruptionbudgets/nexusnet-frontend-pdb"),
+        k8sGet("/apis/batch/v1/namespaces/default/cronjobs"),
+        k8sGet("/apis/networking.k8s.io/v1/namespaces/default/networkpolicies"),
+        k8sGet("/apis/networking.k8s.io/v1/namespaces/monitoring/networkpolicies"),
+        k8sGet("/apis/networking.k8s.io/v1/namespaces/vault/networkpolicies"),
+        k8sGet("/apis/apps/v1/namespaces/vault/statefulsets/vault"),
+        k8sGet("/apis/apps/v1/namespaces/monitoring/deployments/grafana"),
+        k8sGet("/apis/apps/v1/namespaces/monitoring/deployments/prometheus"),
+      ]);
+
+      const api = summarizeReplica(apiDep.body);
+      const frontend = summarizeReplica(frontendDep.body);
+      const postgres = summarizeReplica(postgresSts.body);
+      const redisMaster = summarizeReplica(redisSts.body);
+      const vault = summarizeReplica(vaultSts.body);
+      const grafana = summarizeReplica(grafanaDep.body);
+      const prometheus = summarizeReplica(prometheusDep.body);
+
+      const cjItems = (cronjobs.ok && cronjobs.body && cronjobs.body.items) || [];
+      const drTargets = ["postgres-backup", "redis-backup", "nexusnet-integrity-check"];
+      const drFound = drTargets.filter((name) => cjItems.some((x) => x.metadata && x.metadata.name === name));
+
+      const networkPolicies = {
+        default: (npDefault.ok && npDefault.body.items && npDefault.body.items.length) || 0,
+        monitoring: (npMonitoring.ok && npMonitoring.body.items && npMonitoring.body.items.length) || 0,
+        vault: (npVault.ok && npVault.body.items && npVault.body.items.length) || 0,
+      };
+
+      const coverage = {
+        resiliencia_fallos:
+          api.healthy && frontend.healthy && postgres.healthy && redisMaster.healthy,
+        orquestacion_automatizacion:
+          hpa.ok && pdbApi.ok && pdbFrontend.ok,
+        seguridad_multinivel:
+          networkPolicies.default + networkPolicies.monitoring + networkPolicies.vault > 0,
+        hibrida_local_servicios:
+          vault.healthy && grafana.healthy && prometheus.healthy,
+        dr_recuperacion:
+          drFound.length >= 2,
+      };
+
+      const score = Object.values(coverage).filter(Boolean).length;
+      const ready = score >= 4;
+
+      return {
+        service: "resilience-auditor",
+        timestamp: new Date().toISOString(),
+        ready_for_demo: ready,
+        score: `${score}/5`,
+        components: {
+          api,
+          frontend,
+          postgres,
+          redis_master: redisMaster,
+          vault,
+          grafana,
+          prometheus,
+          hpa_present: hpa.ok,
+          pdb_api_present: pdbApi.ok,
+          pdb_frontend_present: pdbFrontend.ok,
+          dr_cronjobs_found: drFound,
+          dr_cronjobs_expected: drTargets,
+          network_policies: networkPolicies,
+        },
+        requirements_coverage: coverage,
+      };
+    }
+
+    const server = http.createServer(async (req, res) => {
+      const url = req.url || "/";
+      const normalized = url.startsWith("/resilience") ? url.slice("/resilience".length) || "/" : url;
+
+      if (normalized === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, service: "resilience-auditor" }));
+        return;
+      }
+
+      if (normalized === "/report") {
+        const report = await collectReport();
+        const code = report.ready_for_demo ? 200 : 503;
+        res.writeHead(code, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(report, null, 2));
+        return;
+      }
+
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("resilience-auditor: use /health or /report\n");
+    });
+
+    server.listen(8081, () => {
+      console.log("resilience-auditor listening on 8081");
+    });
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resilience-auditor
+  namespace: default
+  labels:
+    app: resilience-auditor
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: resilience-auditor
+  template:
+    metadata:
+      labels:
+        app: resilience-auditor
+    spec:
+      serviceAccountName: resilience-auditor
+      containers:
+        - name: auditor
+          image: node:20-alpine
+          command: ["node", "/app/server.js"]
+          ports:
+            - containerPort: 8081
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          volumeMounts:
+            - name: app-script
+              mountPath: /app
+      volumes:
+        - name: app-script
+          configMap:
+            name: resilience-auditor-script
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: resilience-auditor
+  namespace: default
+  labels:
+    app: resilience-auditor
+spec:
+  type: ClusterIP
+  selector:
+    app: resilience-auditor
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081

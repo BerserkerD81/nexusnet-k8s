@@ -1,0 +1,793 @@
+###############################################################################
+# STACK DE MONITOREO — Prometheus + Grafana + Alertmanager
+#
+# Objetivo académico:
+#   • Orquestación y automatización: métricas automáticas de todos los pods
+#   • Tolerancia a fallos: alertas automáticas ante degradación del sistema
+#   • Integra con las anotaciones existentes en 05-backend.yaml:
+#       prometheus.io/scrape: "true"
+#       prometheus.io/path: "/metrics"
+###############################################################################
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    name: monitoring
+
+---
+# ── RBAC: Prometheus necesita leer pods y endpoints ──────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    resources: [nodes, nodes/proxy, services, endpoints, pods]
+    verbs: [get, list, watch]
+  - apiGroups: [extensions, networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+  - nonResourceURLs: [/metrics, /metrics/cadvisor]
+    verbs: [get]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring
+
+---
+# ── ConfigMap: Prometheus — scraping automático de pods anotados ──────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: nexusnet-local
+        environment: development
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ["alertmanager:9093"]
+
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+
+    scrape_configs:
+      # ── NexusNet API (ya tiene anotaciones en 05-backend.yaml) ───────────────
+      - job_name: nexusnet-api
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+
+      # ── PostgreSQL exporter ──────────────────────────────────────────────────
+      - job_name: postgres
+        static_configs:
+          - targets: ["postgres-exporter.monitoring:9187"]
+        relabel_configs:
+          - target_label: service
+            replacement: postgres
+
+      # ── Redis exporter ───────────────────────────────────────────────────────
+      - job_name: redis
+        static_configs:
+          - targets: ["redis-exporter.monitoring:9121"]
+
+      # ── Kubernetes nodes (cAdvisor) ─────────────────────────────────────────
+      - job_name: kubernetes-nodes-cadvisor
+        kubernetes_sd_configs:
+          - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+
+      # ── Vault metrics ────────────────────────────────────────────────────────
+      - job_name: vault
+        metrics_path: /v1/sys/metrics
+        params:
+          format: [prometheus]
+        bearer_token: "nexusnet-dev-root-token"
+        static_configs:
+          - targets: ["vault.vault:8200"]
+
+  # ── Reglas de alertas ────────────────────────────────────────────────────────
+  nexusnet-alerts.yml: |
+    groups:
+      - name: nexusnet-availability
+        interval: 30s
+        rules:
+          # Pod backend caído
+          - alert: NexusNetAPIDown
+            expr: up{job="nexusnet-api"} == 0
+            for: 1m
+            labels:
+              severity: critical
+              service: nexusnet-api
+            annotations:
+              summary: "NexusNet API pod caído"
+              description: "El pod {{ $labels.pod }} lleva 1 minuto sin responder."
+              runbook: "kubectl rollout restart deployment/nexusnet-api"
+
+          # Alta latencia (P95 > 1s)
+          - alert: HighAPILatency
+            expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="nexusnet-api"}[5m])) > 1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Latencia P95 > 1 segundo"
+              description: "Percentil 95 de latencia: {{ $value | humanizeDuration }}"
+
+          # Tasa de error > 5%
+          - alert: HighErrorRate
+            expr: |
+              rate(http_requests_total{job="nexusnet-api",status=~"5.."}[5m])
+              /
+              rate(http_requests_total{job="nexusnet-api"}[5m]) > 0.05
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Tasa de errores 5xx > 5%"
+              description: "{{ $value | humanizePercentage }} de requests fallando"
+
+      - name: nexusnet-database
+        rules:
+          # PostgreSQL no disponible
+          - alert: PostgreSQLDown
+            expr: pg_up == 0
+            for: 30s
+            labels:
+              severity: critical
+            annotations:
+              summary: "PostgreSQL no disponible"
+              description: "Fallo de base de datos detectado."
+
+          # Lag de replicación > 30s
+          - alert: PostgreSQLReplicationLag
+            expr: pg_stat_replication_pg_current_wal_lsn_diff > 30
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Lag de replicación PostgreSQL elevado"
+              description: "Retraso actual: {{ $value }}s"
+
+          # Redis no disponible
+          - alert: RedisDown
+            expr: redis_up == 0
+            for: 30s
+            labels:
+              severity: critical
+            annotations:
+              summary: "Redis master no disponible"
+              description: "Sentinel debería iniciar failover automático."
+
+      - name: nexusnet-security
+        rules:
+          # Muchos intentos de login fallidos (posible brute force)
+          - alert: BruteForceAttempt
+            expr: rate(http_requests_total{job="nexusnet-api",path=~"/auth/login|/auth/register",status="429"}[5m]) > 10
+            for: 1m
+            labels:
+              severity: warning
+              category: security
+            annotations:
+              summary: "Posible ataque de fuerza bruta"
+              description: "{{ $value }} requests 429 por segundo en endpoints de auth"
+
+          # Vault inaccesible (secretos no disponibles)
+          - alert: VaultUnreachable
+            expr: up{job="vault"} == 0
+            for: 2m
+            labels:
+              severity: critical
+              category: security
+            annotations:
+              summary: "Vault no disponible — secretos inaccesibles"
+              description: "Los pods nuevos del backend no podrán obtener credenciales."
+
+---
+# ── Deployment: Prometheus ────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.52.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=15d
+            - --web.enable-lifecycle   # Permite reload sin restart
+            - --web.enable-admin-api
+            - --web.external-url=http://localhost:9090/prometheus
+            - --web.route-prefix=/
+          ports:
+            - containerPort: 9090
+              name: prometheus
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: rules
+              mountPath: /etc/prometheus/rules
+            - name: data
+              mountPath: /prometheus
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9090
+            initialDelaySeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            initialDelaySeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+            items:
+              - key: prometheus.yml
+                path: prometheus.yml
+        - name: rules
+          configMap:
+            name: prometheus-config
+            items:
+              - key: nexusnet-alerts.yml
+                path: nexusnet-alerts.yml
+        - name: data
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9090
+      targetPort: 9090
+      name: prometheus
+  selector:
+    app: prometheus
+
+---
+# ── ConfigMap: Alertmanager ───────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+
+    route:
+      group_by: [alertname, severity]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: default
+
+      routes:
+        - match:
+            severity: critical
+          receiver: critical-alerts
+          continue: true
+        - match:
+            category: security
+          receiver: security-alerts
+
+    receivers:
+      - name: default
+        webhook_configs:
+          - url: "http://nexusnet-api.default:3000/internal/alerts"
+            send_resolved: true
+
+      - name: critical-alerts
+        webhook_configs:
+          - url: "http://nexusnet-api.default:3000/internal/alerts/critical"
+            send_resolved: true
+
+      - name: security-alerts
+        webhook_configs:
+          - url: "http://nexusnet-api.default:3000/internal/alerts/security"
+            send_resolved: true
+
+    inhibit_rules:
+      - source_match:
+          severity: critical
+        target_match:
+          severity: warning
+        equal: [alertname]
+
+---
+# ── Deployment: Alertmanager ──────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.27.0
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports:
+            - containerPort: 9093
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+            - name: data
+              mountPath: /alertmanager
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: data
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9093
+      name: alertmanager
+  selector:
+    app: alertmanager
+
+---
+# ── ConfigMap: Grafana — datasources y dashboards precargados ─────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-config
+  namespace: monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: nexusnet
+        type: file
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+
+---
+# ── ConfigMap: dashboards JSON preloaded (dashboard file is mounted into grafana)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+  labels:
+    app: grafana
+data:
+  nexusnet-overview.json: |
+    {
+      "id": null,
+      "uid": "nexusnet-overview",
+      "title": "NexusNet Overview",
+      "timezone": "browser",
+      "schemaVersion": 36,
+      "version": 1,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "API Up",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "targets": [ { "expr": "up{job=\"nexusnet-api\"}", "refId": "A" } ],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "type": "timeseries",
+          "title": "API Request Rate (1m)",
+          "gridPos": { "h": 6, "w": 12, "x": 6, "y": 0 },
+          "targets": [ { "expr": "rate(http_requests_total{job=\"nexusnet-api\"}[1m])", "refId": "A" } ]
+        },
+        {
+          "type": "timeseries",
+          "title": "API P95 Latency (5m)",
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 6 },
+          "targets": [ { "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"nexusnet-api\"}[5m]))", "refId": "A" } ]
+        },
+        {
+          "type": "stat",
+          "title": "Alerts Firing",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 6 },
+          "targets": [ { "expr": "sum(ALERTS{alertstate=\"firing\"})", "refId": "A" } ]
+        }
+      ]
+    }
+
+  nexusnet-postgres.json: |
+    {
+      "id": null,
+      "uid": "nexusnet-postgres",
+      "title": "Postgres Overview",
+      "timezone": "browser",
+      "schemaVersion": 36,
+      "version": 1,
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Active Connections",
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 0 },
+          "targets": [ { "expr": "pg_stat_activity_count{job=\"postgres\"}", "refId": "A" } ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Replication Lag (s)",
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 6 },
+          "targets": [ { "expr": "pg_stat_replication_lag_seconds{job=\"postgres\"}", "refId": "A" } ]
+        },
+        {
+          "type": "stat",
+          "title": "DB Up",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "targets": [ { "expr": "up{job=\"postgres\"}", "refId": "A" } ]
+        }
+      ]
+    }
+  nexusnet-redis.json: |
+    {
+      "id": null,
+      "uid": "nexusnet-redis",
+      "title": "Redis Overview",
+      "timezone": "browser",
+      "schemaVersion": 36,
+      "version": 1,
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Commands per Second",
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 0 },
+          "targets": [ { "expr": "rate(redis_commands_processed_total[1m])", "refId": "A" } ]
+        },
+        {
+          "type": "stat",
+          "title": "Used Memory",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "targets": [ { "expr": "redis_memory_used_bytes", "refId": "A" } ]
+        }
+      ]
+    }
+  nexusnet-api.json: |
+    {
+      "id": null,
+      "uid": "nexusnet-api",
+      "title": "API Metrics",
+      "timezone": "browser",
+      "schemaVersion": 36,
+      "version": 1,
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Request Rate (1m)",
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 0 },
+          "targets": [ { "expr": "rate(http_requests_total{job=\"nexusnet-api\"}[1m])", "refId": "A" } ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Error Rate (5xx)",
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 6 },
+          "targets": [ { "expr": "rate(http_requests_total{job=\"nexusnet-api\",status=~\"5..\"}[5m])", "refId": "A" } ]
+        },
+        {
+          "type": "timeseries",
+          "title": "P95 Latency (5m)",
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 0 },
+          "targets": [ { "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"nexusnet-api\"}[5m]))", "refId": "A" } ]
+        }
+      ]
+    }
+
+---
+# ── Deployment: Grafana ───────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.0.0
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "nexusnet-grafana-2024"
+            - name: GF_SERVER_ROOT_URL
+              value: "%(protocol)s://%(domain)s:%(http_port)s/grafana"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+            - name: GF_SECURITY_DISABLE_GRAVATAR
+              value: "true"
+          ports:
+            - containerPort: 3000
+              name: grafana
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-config
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+            - name: grafana-data
+              mountPath: /var/lib/grafana
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-config
+          configMap:
+            name: grafana-dashboards-config
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: grafana-data
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      name: grafana
+  selector:
+    app: grafana
+
+---
+# ── Postgres Exporter ─────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-exporter
+  namespace: monitoring
+  labels:
+    app: postgres-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-exporter
+  template:
+    metadata:
+      labels:
+        app: postgres-exporter
+    spec:
+      containers:
+        - name: postgres-exporter
+          image: prometheuscommunity/postgres-exporter:v0.15.0
+          env:
+            - name: DATA_SOURCE_NAME
+              value: "postgresql://postgres:postgres@postgres.default:5432/nexusnet?sslmode=disable"
+          ports:
+            - containerPort: 9187
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-exporter
+  namespace: monitoring
+spec:
+  ports:
+    - port: 9187
+  selector:
+    app: postgres-exporter
+
+---
+# ── Redis Exporter ────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-exporter
+  namespace: monitoring
+  labels:
+    app: redis-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-exporter
+  template:
+    metadata:
+      labels:
+        app: redis-exporter
+    spec:
+      containers:
+        - name: redis-exporter
+          image: oliver006/redis_exporter:v1.61.0
+          env:
+            - name: REDIS_ADDR
+              value: "redis://redis.default:6379"
+            - name: REDIS_PASSWORD
+              value: "redis_nexusnet_2024"
+          ports:
+            - containerPort: 9121
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-exporter
+  namespace: monitoring
+spec:
+  ports:
+    - port: 9121
+  selector:
+    app: redis-exporter

@@ -1,0 +1,12 @@
+process.env.NODE_ENV = 'test';
+process.env.PORT = '3000';
+process.env.DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/nexusnet_test?schema=public';
+process.env.REDIS_URL = 'redis://localhost:6379';
+process.env.JWT_SECRET = 'test-test-test-test-test-test-test';
+process.env.JWT_REFRESH_SECRET = 'test-refresh-test-refresh-test';
+process.env.JWT_EXPIRES_IN = '15m';
+process.env.MFA_ISSUER = 'NexusNet';
+process.env.BCRYPT_ROUNDS = '12';
+process.env.CORS_ORIGIN = 'http://localhost:3000';
+process.env.RATE_LIMIT_WINDOW_MS = '900000';
+process.env.LOG_LEVEL = 'silent';

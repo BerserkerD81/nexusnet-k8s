@@ -1,0 +1,30 @@
+###############################################################################
+# Traefik IngressRoute para Socket.IO con soporte explícito para WebSocket
+#
+# Esto maneja los headers requeridos para upgrade de WebSocket:
+# - Connection: upgrade
+# - Upgrade: websocket
+#
+# Usa Traefik CRDs (IngressRoute, Middleware) que dan control fino
+# sobre el comportamiento de enrutamiento.
+###############################################################################
+
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: nexusnet-socket-io
+  namespace: default
+spec:
+  entryPoints:
+    - web
+  routes:
+    # ── Socket.IO WebSocket ────────────────────────────────────────────────
+    # Traefik v3.x maneja WebSocket automáticamente con IngressRoute
+    # Los headers de upgrade (Connection: upgrade, Upgrade: websocket) se pasan
+    # a través sin necesidad de middleware
+    - match: Host(`nexusnet.local`) && PathPrefix(`/socket.io`)
+      kind: Rule
+      services:
+        - name: nexusnet-api
+          port: 3000
+          strategy: RoundRobin

@@ -1,0 +1,15 @@
+###############################################################################
+# StorageClass — local-path (k3d/k3s built-in provisioner)
+#
+# k3d includes the Rancher local-path-provisioner by default.
+# This manifest just ensures the StorageClass exists and is marked as default.
+###############################################################################
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: rancher.io/local-path
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete

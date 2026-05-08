@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexusnet-api
+  labels:
+    app: nexusnet-api
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: nexusnet-api
+  template:
+    metadata:
+      labels:
+        app: nexusnet-api
+    spec:
+      containers:
+        - name: api
+          # For local testing: build and load image with: docker build -t nexusnet-api:local .. && k3d image import nexusnet-api:local -c <cluster-name>
+          image: nexusnet-api:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - secretRef:
+                name: nexusnet-jwt-secrets
+            - configMapRef:
+                name: nexusnet-config
+          volumeMounts:
+            - name: nexusnet-data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - nexusnet-api
+              topologyKey: "kubernetes.io/hostname"
+      volumes:
+        - name: nexusnet-data
+          persistentVolumeClaim:
+            claimName: nexusnet-data-pvc
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexusnet-config
+data:
+  DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/nexusnet?schema=public"
+  REDIS_URL: "redis://redis:6379"
+  NODE_ENV: "development"

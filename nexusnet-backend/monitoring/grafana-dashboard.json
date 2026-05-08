@@ -1,0 +1,16 @@
+{
+  "title": "NexusNet API",
+  "schemaVersion": 39,
+  "panels": [
+    { "type": "timeseries", "title": "Request rate" },
+    { "type": "timeseries", "title": "Error rate" },
+    { "type": "timeseries", "title": "P95 / P99 latency" },
+    { "type": "stat", "title": "Active WebSocket connections" },
+    { "type": "timeseries", "title": "Messages/sec" },
+    { "type": "timeseries", "title": "Pod CPU & Memory usage" },
+    { "type": "timeseries", "title": "Pod restarts" },
+    { "type": "timeseries", "title": "DB connection pool usage" },
+    { "type": "timeseries", "title": "Redis hit rate" },
+    { "type": "stat", "title": "Active users" }
+  ]
+}

@@ -1,0 +1,69 @@
+###############################################################################
+# HPA — Horizontal Pod Autoscaler (backend)
+###############################################################################
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nexusnet-api-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nexusnet-api
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 30
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+
+---
+###############################################################################
+# PDB — Pod Disruption Budget (backend)
+# Ensures at least 1 replica stays alive during node maintenance / rollouts
+###############################################################################
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nexusnet-api-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: nexusnet-api
+
+---
+###############################################################################
+# PDB — Pod Disruption Budget (frontend)
+###############################################################################
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nexusnet-frontend-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: nexusnet-frontend

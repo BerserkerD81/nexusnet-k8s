@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: nexusnet
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-primary
+  template:
+    metadata:
+      labels:
+        app: postgres-primary
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1001
+      containers:
+        - name: postgres
+          image: bitnami/postgresql:16
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRESQL_DATABASE
+              value: nexusnet
+            - name: POSTGRESQL_USERNAME
+              value: nexusnet
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexusnet-secrets
+                  key: POSTGRESQL_PASSWORD
+            - name: POSTGRESQL_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexusnet-secrets
+                  key: POSTGRESQL_POSTGRES_PASSWORD
+            - name: POSTGRESQL_REPLICATION_MODE
+              value: master
+            - name: POSTGRESQL_REPLICATION_USER
+              value: repmgr
+            - name: POSTGRESQL_REPLICATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexusnet-secrets
+                  key: POSTGRESQL_REPLICATION_PASSWORD
+            - name: POSTGRESQL_ALLOW_REMOTE_CONNECTIONS
+              value: "yes"
+            - name: POSTGRESQL_WAL_LEVEL
+              value: replica
+            - name: POSTGRESQL_NUM_SYNCHRONOUS_REPLICAS
+              value: "1"
+            - name: POSTGRESQL_SYNCHRONOUS_COMMIT_MODE
+              value: "on"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /bitnami/postgresql
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -h 127.0.0.1 -p 5432 -U nexusnet -d nexusnet
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -h 127.0.0.1 -p 5432 -U nexusnet -d nexusnet
+            periodSeconds: 20
+            timeoutSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi

@@ -1,0 +1,329 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PostAudience {
+  PUBLIC
+  FOLLOWERS_ONLY
+}
+
+enum PostType {
+  TEXT
+  IMAGE
+  POLL
+  MOOD
+}
+
+enum FollowStatus {
+  PENDING
+  ACCEPTED
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+}
+
+enum NotificationType {
+  FOLLOW
+  LIKE
+  REPOST
+  COMMENT
+  MENTION
+  MESSAGE
+  REPLY
+  COMMENT_LIKE
+}
+
+enum EntityType {
+  POST
+  COMMENT
+  MESSAGE
+  USER
+  FOLLOW
+}
+
+enum OAuthProvider {
+  GITHUB
+  GOOGLE
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  username      String       @unique
+  passwordHash  String?
+  displayName   String
+  bio           String?      @db.Text
+  avatarUrl     String?
+  bannerUrl     String?
+  isPrivate     Boolean      @default(false)
+  isVerified    Boolean      @default(false)
+  mfaEnabled    Boolean      @default(false)
+  mfaSecret     String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  deletedAt     DateTime?
+  posts         Post[]
+  comments      Comment[]
+  likes         Like[]
+  commentLikes  CommentLike[]
+  reposts       Repost[]
+  followers     Follow[]     @relation("followers")
+  following     Follow[]     @relation("following")
+  sentMessages  Message[]    @relation("sentMessages")
+  receivedMessages Message[]  @relation("receivedMessages")
+  conversations ConversationParticipant[]
+  notificationsReceived Notification[] @relation("NotificationRecipient")
+  notificationsActed Notification[] @relation("NotificationActor")
+  sessions      Session[]
+  auditLogs     AuditLog[]
+  oauthAccounts OAuthAccount[]
+  publicKeys              UserPublicKey[]
+  notificationPreferences NotificationPreference[]
+
+  @@index([createdAt])
+  @@index([email])
+  @@index([username])
+}
+
+model Post {
+  id             String    @id @default(cuid())
+  content        String    @db.VarChar(280)
+  mediaUrls      String[]   @default([])
+  postType       PostType  @default(TEXT)
+  mood           String?
+  pollQuestion   String?
+  pollOptions    String[]  @default([])
+  authorId       String
+  parentId       String?
+  audience       PostAudience @default(PUBLIC)
+  likesCount     Int       @default(0)
+  repostsCount   Int       @default(0)
+  commentsCount  Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+  author         User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent         Post?     @relation("PostReplies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies        Post[]    @relation("PostReplies")
+  likes          Like[]
+  reposts        Repost[]
+  comments       Comment[]
+
+  @@index([authorId, createdAt])
+  @@index([createdAt])
+  @@index([parentId])
+}
+
+model Comment {
+  id          String   @id @default(cuid())
+  postId      String
+  authorId    String
+  content     String   @db.VarChar(500)
+  likesCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+  post        Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author      User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  likes       CommentLike[]
+
+  @@index([postId, createdAt])
+  @@index([authorId, createdAt])
+}
+
+model Like {
+  id        String   @id @default(cuid())
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId])
+  @@index([userId, createdAt])
+  @@index([postId, createdAt])
+}
+
+model Repost {
+  id        String   @id @default(cuid())
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId])
+  @@index([userId, createdAt])
+  @@index([postId, createdAt])
+}
+
+model Follow {
+  id           String       @id @default(cuid())
+  followerId   String
+  followingId  String
+  status       FollowStatus @default(PENDING)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  follower     User         @relation("following", fields: [followerId], references: [id], onDelete: Cascade)
+  following    User         @relation("followers", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followerId, createdAt])
+  @@index([followingId, createdAt])
+}
+
+model Conversation {
+  id            String                   @id @default(cuid())
+  isGroup       Boolean                  @default(false)
+  name          String?
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  participants  ConversationParticipant[]
+  messages      Message[]
+  publicKeys    UserPublicKey[]
+
+  @@index([createdAt])
+}
+
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversationId String
+  userId         String
+  joinedAt       DateTime     @default(now())
+  lastReadAt     DateTime?
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId, conversationId])
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  senderId       String
+  recipientId    String?
+  content          String?     @db.Text
+  encryptedPayload String?     @db.Text
+  mediaUrl         String?
+  messageType      MessageType @default(TEXT)
+  isRead         Boolean     @default(false)
+  readAt         DateTime?
+  createdAt      DateTime    @default(now())
+  deletedAt      DateTime?
+  isEncrypted    Boolean     @default(true)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User        @relation("sentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient      User?       @relation("receivedMessages", fields: [recipientId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([senderId, createdAt])
+}
+
+model Notification {
+  id           String            @id @default(cuid())
+  recipientId  String
+  actorId      String?
+  type         NotificationType
+  entityId     String?
+  entityType   EntityType?
+  isRead       Boolean           @default(false)
+  createdAt    DateTime          @default(now())
+  recipient    User              @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  actor        User?             @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([recipientId, createdAt])
+  @@index([type, createdAt])
+}
+
+model Session {
+  id            String   @id @default(cuid())
+  userId        String
+  refreshToken  String   @unique
+  deviceInfo    String?
+  ipAddress     String?
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  revokedAt     DateTime?
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  metadata   Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
+
+model CommentLike {
+  id        String   @id @default(cuid())
+  userId    String
+  commentId String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comment   Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, commentId])
+  @@index([commentId, createdAt])
+}
+
+model OAuthAccount {
+  id                String        @id @default(cuid())
+  userId            String
+  provider          OAuthProvider
+  providerAccountId String
+  accessToken       String?       @db.Text
+  refreshToken      String?       @db.Text
+  expiresAt         DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model UserPublicKey {
+  id             String       @id @default(cuid())
+  userId         String
+  conversationId String
+  /// Base64-encoded X25519 public key (32 raw bytes → 44 base64 chars)
+  publicKey      String       @db.VarChar(64)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, conversationId])
+  @@index([userId])
+  @@index([conversationId])
+}
+
+model NotificationPreference {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  /// true = user wants this notification; false = muted
+  enabled   Boolean          @default(true)
+  updatedAt DateTime         @updatedAt
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+  @@index([userId])
+}

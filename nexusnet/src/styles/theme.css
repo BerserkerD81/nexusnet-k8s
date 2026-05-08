@@ -1,0 +1,371 @@
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-size: 16px;
+
+  /* PHREAK — Persona 5 Punk Palette */
+  --phantom-black: #000000;
+  --phantom-red: #E8002D;
+  --bone-white: #F5F0E8;
+  --metaverse-cyan: #00FFE5;
+  --treasure-yellow: #FFE600;
+  --blood-overlay: #1a0000;
+
+  --background: #000000;
+  --foreground: #F5F0E8;
+  --card: #0a0000;
+  --card-foreground: #F5F0E8;
+  --popover: #0a0000;
+  --popover-foreground: #F5F0E8;
+  --primary: #E8002D;
+  --primary-foreground: #F5F0E8;
+  --secondary: #1a0000;
+  --secondary-foreground: #F5F0E8;
+  --muted: #1a0000;
+  --muted-foreground: #b8a89a;
+  --accent: #E8002D;
+  --accent-foreground: #F5F0E8;
+  --destructive: #E8002D;
+  --destructive-foreground: #F5F0E8;
+  --border: #E8002D;
+  --input: #1a0000;
+  --input-background: #0a0000;
+  --switch-background: #1a0000;
+  --font-weight-medium: 700;
+  --font-weight-normal: 400;
+  --ring: #E8002D;
+  --chart-1: #E8002D;
+  --chart-2: #00FFE5;
+  --chart-3: #FFE600;
+  --chart-4: #F5F0E8;
+  --chart-5: #1a0000;
+  --radius: 0px;
+  --sidebar: #000000;
+  --sidebar-foreground: #F5F0E8;
+  --sidebar-primary: #E8002D;
+  --sidebar-primary-foreground: #F5F0E8;
+  --sidebar-accent: #1a0000;
+  --sidebar-accent-foreground: #F5F0E8;
+  --sidebar-border: #E8002D;
+  --sidebar-ring: #E8002D;
+}
+
+.dark {
+  --background: #000000;
+  --foreground: #F5F0E8;
+  --card: #0a0000;
+  --card-foreground: #F5F0E8;
+  --popover: #0a0000;
+  --popover-foreground: #F5F0E8;
+  --primary: #E8002D;
+  --primary-foreground: #F5F0E8;
+  --secondary: #1a0000;
+  --secondary-foreground: #F5F0E8;
+  --muted: #1a0000;
+  --muted-foreground: #b8a89a;
+  --accent: #E8002D;
+  --accent-foreground: #F5F0E8;
+  --destructive: #E8002D;
+  --destructive-foreground: #F5F0E8;
+  --border: #E8002D;
+  --input: #1a0000;
+  --ring: #E8002D;
+  --font-weight-medium: 700;
+  --font-weight-normal: 400;
+  --chart-1: #E8002D;
+  --chart-2: #00FFE5;
+  --chart-3: #FFE600;
+  --chart-4: #F5F0E8;
+  --chart-5: #b8a89a;
+  --sidebar: #000000;
+  --sidebar-foreground: #F5F0E8;
+  --sidebar-primary: #E8002D;
+  --sidebar-primary-foreground: #F5F0E8;
+  --sidebar-accent: #1a0000;
+  --sidebar-accent-foreground: #F5F0E8;
+  --sidebar-border: #E8002D;
+  --sidebar-ring: #E8002D;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-phantom-red: var(--phantom-red);
+  --color-bone-white: var(--bone-white);
+  --color-metaverse-cyan: var(--metaverse-cyan);
+  --color-treasure-yellow: var(--treasure-yellow);
+  --color-blood-overlay: var(--blood-overlay);
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    border-radius: 0 !important;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Archivo', 'Archivo Black', system-ui, sans-serif;
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(232, 0, 45, 0.08) 1px, transparent 0);
+    background-size: 16px 16px;
+  }
+
+  html { font-size: var(--font-size); }
+
+  h1 { font-family: 'Bebas Neue', sans-serif; font-size: 4.5rem; line-height: 1; letter-spacing: 0.02em; color: var(--phantom-red); text-shadow: 4px 4px 0 #000; }
+  h2 { font-family: 'Black Han Sans', 'Archivo Black', sans-serif; font-size: 3rem; line-height: 1; font-style: italic; color: var(--bone-white); }
+  h3 { font-family: 'Bebas Neue', sans-serif; font-size: 2rem; letter-spacing: 0.04em; color: var(--bone-white); }
+  h4 { font-family: 'Archivo Black', sans-serif; font-size: 1.25rem; color: var(--bone-white); }
+
+  label { font-family: 'Space Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--bone-white); }
+  button { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.08em; }
+  input { font-family: 'Space Mono', monospace; }
+}
+
+/* PHREAK utilities */
+.phreak-shadow-hard { box-shadow: 4px 4px 0 #000; }
+.phreak-shadow-red { box-shadow: 4px 4px 0 #E8002D; }
+.phreak-shadow-cyan { box-shadow: 3px 3px 0 #FFE600; }
+.phreak-shadow-yellow { box-shadow: 3px 3px 0 #FFE600; }
+
+.phreak-sticker {
+  border: 2px solid #F5F0E8;
+  outline: 1px solid #000;
+  outline-offset: 0;
+  box-shadow: 3px 3px 0 #000;
+}
+
+.phreak-tilt-l { transform: rotate(-2deg); }
+.phreak-tilt-r { transform: rotate(2deg); }
+.phreak-skew { transform: skewX(-5deg); }
+
+.phreak-handle { font-family: 'Space Mono', monospace; color: #00FFE5; font-size: 13px; }
+.phreak-mono-label { font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; }
+.phreak-headline { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.06em; }
+.phreak-marker { font-family: 'Permanent Marker', cursive; }
+.phreak-jp { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 0.15em; color: #b8a89a; }
+
+.phreak-halftone {
+  background-image: radial-gradient(#000 1.2px, transparent 1.4px);
+  background-size: 6px 6px;
+}
+
+.phreak-diagonal-divider {
+  height: 4px;
+  background: repeating-linear-gradient(
+    -45deg,
+    #E8002D 0 8px,
+    transparent 8px 16px
+  );
+}
+
+.phreak-scanline::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(232, 0, 45, 0.04) 0 2px,
+    transparent 2px 4px
+  );
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+@keyframes phreak-slide-in {
+  0%   { transform: translateX(-40px) skewX(-10deg); opacity: 0; }
+  100% { transform: translateX(0) skewX(0deg); opacity: 1; }
+}
+.phreak-slide-in { animation: phreak-slide-in 280ms steps(8) both; }
+
+@keyframes phreak-pop {
+  0% { transform: scale(0.7); }
+  50% { transform: scale(1.3); }
+  100% { transform: scale(1); }
+}
+.phreak-pop { animation: phreak-pop 360ms steps(6); }
+
+@keyframes phreak-shake {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-10deg); }
+  75% { transform: rotate(10deg); }
+}
+.phreak-shake { animation: phreak-shake 200ms steps(4); }
+
+.phreak-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  background: #E8002D; color: #F5F0E8; border: 2px solid #F5F0E8;
+  padding: 0.65rem 1.25rem; font-family: 'Bebas Neue', sans-serif;
+  letter-spacing: 0.1em; font-size: 1.1rem; box-shadow: 4px 4px 0 #000;
+  transition: transform 80ms steps(2), box-shadow 80ms steps(2);
+  cursor: pointer; text-transform: uppercase;
+}
+.phreak-btn:hover { transform: translate(-3px, -3px); box-shadow: 7px 7px 0 #000; }
+.phreak-btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #000; }
+.phreak-btn-outline { background: transparent; color: #F5F0E8; }
+.phreak-btn-cyan { background: #000; color: #FFE600; border-color: #FFE600; box-shadow: 4px 4px 0 #FFE600; }
+.phreak-btn-yellow { background: #FFE600; color: #000; border-color: #000; box-shadow: 4px 4px 0 #E8002D; }
+
+.phreak-card {
+  background: #0a0000;
+  border-left: 4px solid #E8002D;
+  border-top: 1px solid rgba(245,240,232,0.1);
+  border-bottom: 1px solid rgba(245,240,232,0.05);
+  position: relative;
+}
+
+.phreak-mixed-case::first-letter { text-transform: uppercase; }
+
+/* P5 sidebar diagonal hatch */
+.phreak-hatch {
+  background-color: #000;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 4px,
+    rgba(232, 0, 45, 0.08) 4px 5px
+  );
+}
+
+/* Halftone overlay for cards */
+.phreak-card-tex {
+  background-color: #0D0D0D;
+  background-image:
+    radial-gradient(rgba(255,255,255,0.10) 1.1px, transparent 1.3px),
+    linear-gradient(135deg, transparent 0 100%);
+  background-size: 6px 6px, 100% 100%;
+}
+
+/* Speed lines */
+.phreak-speedlines {
+  background:
+    repeating-conic-gradient(
+      from 0deg at 50% 50%,
+      transparent 0deg 4deg,
+      rgba(232,0,45,0.08) 4deg 5deg
+    );
+}
+
+/* Parallelogram nav items */
+.phreak-parallelogram {
+  transform: skewX(-8deg);
+}
+.phreak-parallelogram > * {
+  transform: skewX(8deg);
+}
+
+/* Folded corner */
+.phreak-fold::after {
+  content: '';
+  position: absolute; top: 0; right: 0;
+  border-style: solid;
+  border-width: 0 16px 16px 0;
+  border-color: transparent #E8002D transparent transparent;
+}
+
+/* Phantom eye toggle base */
+.phreak-eye {
+  width: 44px; height: 22px; border: 2px solid #F5F0E8;
+  background: #000; position: relative; cursor: pointer;
+  display: inline-block;
+}
+.phreak-eye[data-on="true"] { background: #E8002D; }
+.phreak-eye::before {
+  content: ''; position: absolute; top: 3px; left: 3px;
+  width: 12px; height: 12px; background: #F5F0E8; border-radius: 50%;
+  transition: transform 120ms steps(3);
+}
+.phreak-eye[data-on="true"]::before { transform: translateX(20px); background: #FFE600; }
+
+/* Hex avatar wrapper */
+.phreak-hex {
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+  background: #E8002D;
+  padding: 3px;
+}
+
+@keyframes phreak-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.2; }
+}
+.phreak-blink { animation: phreak-blink 1.2s steps(4) infinite; }
+
+@keyframes phreak-breathe {
+  0%, 100% { transform: scale(1) rotate(-2deg); }
+  50%      { transform: scale(1.04) rotate(-2deg); }
+}
+.phreak-breathe { animation: phreak-breathe 2s ease-in-out infinite; }
+
+@keyframes phreak-color-flash {
+  0%, 100% { color: #FFFFFF; text-shadow: 6px 6px 0 #E8002D; }
+  25%      { color: #E8002D; text-shadow: 6px 6px 0 #FFFFFF; }
+  50%      { color: #FFFFFF; text-shadow: 6px 6px 0 #E8002D; }
+  75%      { color: #E8002D; text-shadow: 6px 6px 0 #FFFFFF; }
+}
+.phreak-color-flash { animation: phreak-color-flash 600ms steps(6) 1; }
+
+@keyframes phreak-slam-down {
+  0%   { transform: translateY(-120%) scale(0.5); opacity: 0; }
+  60%  { transform: translateY(20px) scale(1.1); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+.phreak-slam-down { animation: phreak-slam-down 500ms cubic-bezier(.5,1.6,.4,1) both; }
+
+@keyframes phreak-flash-white {
+  0%, 100% { background: #FFE600; }
+  50%      { background: #FFFFFF; }
+}
+
+@keyframes phreak-pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(232,0,45,0.6), 4px 4px 0 #000; }
+  50%      { box-shadow: 0 0 0 12px rgba(232,0,45,0), 4px 4px 0 #000; }
+}
+
+/* Diamond FAB */
+.phreak-fab {
+  width: 56px; height: 56px;
+  background: #E8002D;
+  transform: rotate(45deg);
+  border: 3px solid #F5F0E8;
+  display: grid; place-items: center;
+  box-shadow: 4px 4px 0 #000;
+  cursor: pointer;
+  animation: phreak-pulse-glow 3s steps(8) infinite;
+}
+.phreak-fab > * { transform: rotate(-45deg); color: #F5F0E8; }
+

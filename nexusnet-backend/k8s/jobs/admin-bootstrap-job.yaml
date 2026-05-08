@@ -1,0 +1,22 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nexusnet-admin-bootstrap
+  namespace: nexusnet
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: nexusnet/api:latest
+          command:
+            - sh
+            - -c
+            - npm run prisma:generate && npm run prisma:push && npm run seed:admin
+          envFrom:
+            - configMapRef:
+                name: nexusnet-config
+            - secretRef:
+                name: nexusnet-secrets

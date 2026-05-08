@@ -1,0 +1,8 @@
+###############################################################################
+# NexusNet — Ingress (DEPRECATED - Ahora consolidado en setup.sh)
+#
+# El Ingress consolidado se crea dinámicamente en setup.sh para evitar
+# conflictos de rutas entre frontend, API, Grafana, Prometheus y Vault.
+# Ver: create_consolidated_ingress() en setup.sh
+###############################################################################
+

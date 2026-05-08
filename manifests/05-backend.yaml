@@ -1,0 +1,160 @@
+###############################################################################
+# NexusNet API — Deployment + Service + PVC
+###############################################################################
+
+# ── PVC for uploaded files / runtime data ──────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nexusnet-data-pvc
+  labels:
+    app: nexusnet-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# ── Deployment ─────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexusnet-api
+  labels:
+    app: nexusnet-api
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: nexusnet-api
+  template:
+    metadata:
+      labels:
+        app: nexusnet-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "3000"
+    spec:
+      # Spread pods across different nodes (high availability)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - nexusnet-api
+                topologyKey: "kubernetes.io/hostname"
+      # Wait for dependencies before starting
+      initContainers:
+        # Esperar al PRIMARY de PostgreSQL (postgres-0)
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgres-0.postgres-headless 5432; do
+                echo "Esperando PostgreSQL primary (postgres-0)..."; sleep 2;
+              done
+              echo "PostgreSQL primary listo."
+        # Esperar al master de Redis
+        - name: wait-for-redis
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z redis-master-0.redis-master-headless 6379; do
+                echo "Esperando Redis master..."; sleep 2;
+              done
+              echo "Redis master listo."
+        # Esperar a que al menos 1 sentinel esté disponible
+        - name: wait-for-sentinel
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z redis-sentinel 26379; do
+                echo "Esperando Redis Sentinel..."; sleep 2;
+              done
+              echo "Redis Sentinel listo."
+      containers:
+        - name: api
+          image: nexusnet-api:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          # Load config from ConfigMap and secrets
+          envFrom:
+            - configMapRef:
+                name: nexusnet-config
+            - secretRef:
+                name: nexusnet-jwt-secrets
+            - secretRef:
+                name: nexusnet-redis-secret
+            - secretRef:
+                name: nexusnet-oauth-secrets
+          volumeMounts:
+            - name: nexusnet-data
+              mountPath: /data
+          # Liveness: restart if truly stuck
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          # Readiness: stop sending traffic if not ready
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: nexusnet-data
+          persistentVolumeClaim:
+            claimName: nexusnet-data-pvc
+
+---
+# ── Service ────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexusnet-api
+  labels:
+    app: nexusnet-api
+spec:
+  # ✅ ClusterIP es suficiente: Traefik Ingress maneja acceso externo
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: 3000
+      protocol: TCP
+      name: http
+  selector:
+    app: nexusnet-api

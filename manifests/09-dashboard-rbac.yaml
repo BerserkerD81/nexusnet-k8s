@@ -1,0 +1,49 @@
+###############################################################################
+# Kubernetes Dashboard — Admin ServiceAccount
+#
+# Apply AFTER installing the dashboard:
+#   kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+#
+# This creates an admin user and grants cluster-wide read access for
+# monitoring and management via the dashboard UI.
+###############################################################################
+
+# ── ServiceAccount ─────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nexusnet-admin
+  namespace: kubernetes-dashboard
+  labels:
+    app: nexusnet-dashboard
+
+---
+# ── ClusterRoleBinding (admin access) ─────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nexusnet-admin
+  labels:
+    app: nexusnet-dashboard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: nexusnet-admin
+    namespace: kubernetes-dashboard
+
+---
+# ── Long-lived token secret ────────────────────────────────────────────────────
+# kubernetes.io/service-account-token creates a non-expiring token
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nexusnet-admin-token
+  namespace: kubernetes-dashboard
+  labels:
+    app: nexusnet-dashboard
+  annotations:
+    kubernetes.io/service-account.name: nexusnet-admin
+type: kubernetes.io/service-account-token

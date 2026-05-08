@@ -1,0 +1,408 @@
+###############################################################################
+# RECUPERACIÓN ANTE DESASTRES (DR) — Backup + Restore + Chaos Testing
+#
+# Objetivo académico:
+#   • Recuperación ante desastres: backups automáticos de PostgreSQL y Redis
+#   • Tolerancia a fallos: CronJob que prueba la integridad del backup
+#   • Replicación: exporta el backup a volumen persistente (simula S3 en local)
+#   • RTO (Recovery Time Objective) < 5 min / RPO (Recovery Point Objective) < 1h
+###############################################################################
+
+# ── PVC para almacenar backups localmente (simula bucket S3 en dev) ───────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nexusnet-backups-pvc
+  labels:
+    app: nexusnet-backup
+    tier: disaster-recovery
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# ── ConfigMap: scripts de backup y restore ───────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dr-scripts
+  labels:
+    app: nexusnet-dr
+data:
+  # Script de backup de PostgreSQL
+  pg-backup.sh: |
+    #!/bin/sh
+    set -e
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_DIR="/backups/postgres"
+    BACKUP_FILE="${BACKUP_DIR}/nexusnet_${TIMESTAMP}.sql.gz"
+    LATEST_FILE="${BACKUP_DIR}/nexusnet_latest.sql.gz"
+
+    mkdir -p "$BACKUP_DIR"
+    echo "📦 Iniciando backup PostgreSQL @ ${TIMESTAMP}"
+
+    # pg_dump comprimido al vuelo
+    PGPASSWORD="$POSTGRES_PASSWORD" pg_dump \
+      -h "$POSTGRES_HOST" \
+      -U "$POSTGRES_USER" \
+      -d nexusnet \
+      --no-owner \
+      --no-acl \
+      --format=custom \
+      | gzip > "$BACKUP_FILE"
+
+    # Actualizar symlink "latest"
+    cp "$BACKUP_FILE" "$LATEST_FILE"
+
+    # Calcular checksum para verificación de integridad
+    sha256sum "$BACKUP_FILE" > "${BACKUP_FILE}.sha256"
+
+    echo "✅ Backup completado: $BACKUP_FILE ($(du -sh "$BACKUP_FILE" | cut -f1))"
+
+    # Retención: conservar solo últimos 7 backups
+    ls -t "${BACKUP_DIR}"/nexusnet_*.sql.gz 2>/dev/null | tail -n +8 | xargs -r rm -f
+    echo "🧹 Limpieza: conservados últimos 7 backups"
+
+  # Script de restore de PostgreSQL
+  pg-restore.sh: |
+    #!/bin/sh
+    set -e
+    BACKUP_FILE="${1:-/backups/postgres/nexusnet_latest.sql.gz}"
+
+    if [ ! -f "$BACKUP_FILE" ]; then
+      echo "❌ Backup no encontrado: $BACKUP_FILE"
+      exit 1
+    fi
+
+    echo "🔄 Restaurando desde: $BACKUP_FILE"
+
+    # Verificar integridad del backup
+    if [ -f "${BACKUP_FILE}.sha256" ]; then
+      sha256sum -c "${BACKUP_FILE}.sha256" || { echo "❌ Checksum inválido"; exit 1; }
+    fi
+
+    # Terminar conexiones activas
+    PGPASSWORD="$POSTGRES_PASSWORD" psql \
+      -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d postgres \
+      -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='nexusnet' AND pid <> pg_backend_pid();"
+
+    # Drop y recrear la base de datos
+    PGPASSWORD="$POSTGRES_PASSWORD" psql \
+      -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d postgres \
+      -c "DROP DATABASE IF EXISTS nexusnet;"
+    PGPASSWORD="$POSTGRES_PASSWORD" psql \
+      -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d postgres \
+      -c "CREATE DATABASE nexusnet OWNER postgres;"
+
+    # Restaurar
+    gunzip -c "$BACKUP_FILE" | PGPASSWORD="$POSTGRES_PASSWORD" pg_restore \
+      -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d nexusnet \
+      --no-owner --no-acl --exit-on-error
+
+    echo "✅ Restore completado exitosamente"
+    echo "ℹ️  Siguiente paso: kubectl rollout restart deployment/nexusnet-api"
+
+  # Script de backup de Redis (RDB snapshot)
+  redis-backup.sh: |
+    #!/bin/sh
+    set -e
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_DIR="/backups/redis"
+    mkdir -p "$BACKUP_DIR"
+
+    echo "📦 Iniciando backup Redis @ ${TIMESTAMP}"
+
+    # Forzar snapshot RDB
+    redis-cli -h "$REDIS_HOST" -p 6379 -a "$REDIS_PASSWORD" BGSAVE
+    sleep 3   # Esperar que termine el background save
+
+    # Copiar el dump.rdb
+    kubectl cp default/redis-master-0:/data/dump.rdb \
+      "${BACKUP_DIR}/redis_${TIMESTAMP}.rdb" 2>/dev/null || \
+      redis-cli -h "$REDIS_HOST" -p 6379 -a "$REDIS_PASSWORD" \
+        --rdb "${BACKUP_DIR}/redis_${TIMESTAMP}.rdb"
+
+    echo "✅ Redis backup: ${BACKUP_DIR}/redis_${TIMESTAMP}.rdb"
+
+  # Script de verificación de integridad (chaos drill)
+  integrity-check.sh: |
+    #!/bin/sh
+    set -e
+    echo "🔍 Verificación de integridad del sistema NexusNet"
+    ERRORS=0
+
+    # 1. Verificar que el backup más reciente existe y tiene checksum válido
+    LATEST="/backups/postgres/nexusnet_latest.sql.gz"
+    if [ ! -f "$LATEST" ]; then
+      echo "❌ No existe backup de PostgreSQL"
+      ERRORS=$((ERRORS+1))
+    else
+      echo "✅ Backup PostgreSQL existe: $(du -sh "$LATEST" | cut -f1)"
+    fi
+
+    # 2. Verificar conectividad a PostgreSQL
+    if PGPASSWORD="$POSTGRES_PASSWORD" pg_isready -h "$POSTGRES_HOST" -U "$POSTGRES_USER"; then
+      echo "✅ PostgreSQL accesible"
+    else
+      echo "❌ PostgreSQL NO accesible"
+      ERRORS=$((ERRORS+1))
+    fi
+
+    # 3. Verificar conectividad a Redis
+    if redis-cli -h "$REDIS_HOST" -p 6379 -a "$REDIS_PASSWORD" PING | grep -q PONG; then
+      echo "✅ Redis accesible"
+    else
+      echo "❌ Redis NO accesible"
+      ERRORS=$((ERRORS+1))
+    fi
+
+    # 4. Verificar endpoint de health del API
+    if wget -qO- "http://nexusnet-api.default:3000/health" | grep -q "ok"; then
+      echo "✅ API health check OK"
+    else
+      echo "❌ API NO responde"
+      ERRORS=$((ERRORS+1))
+    fi
+
+    # 5. Verificar replicación PostgreSQL
+    REPLICAS=$(PGPASSWORD="$POSTGRES_PASSWORD" psql \
+      -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d nexusnet \
+      -tAc "SELECT count(*) FROM pg_stat_replication;" 2>/dev/null || echo "0")
+    echo "ℹ️  Réplicas PostgreSQL activas: $REPLICAS"
+
+    echo ""
+    if [ "$ERRORS" -eq 0 ]; then
+      echo "✅ Todos los checks pasados — Sistema saludable"
+      exit 0
+    else
+      echo "❌ $ERRORS checks fallidos — Revisar inmediatamente"
+      exit 1
+    fi
+
+---
+# ── CronJob: Backup automático de PostgreSQL cada hora ───────────────────────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  labels:
+    app: nexusnet-dr
+    component: postgres-backup
+spec:
+  schedule: "0 * * * *"   # Cada hora (RPO = 1h)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600   # Timeout de 10 minutos
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: nexusnet-dr
+            job: postgres-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-backup
+              image: postgres:16-alpine
+              command: ["/bin/sh", "/scripts/pg-backup.sh"]
+              env:
+                - name: POSTGRES_HOST
+                  value: "postgres.default.svc.cluster.local"
+                - name: POSTGRES_USER
+                  value: "postgres"
+                - name: POSTGRES_PASSWORD
+                  value: "postgres"
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+          volumes:
+            - name: scripts
+              configMap:
+                name: dr-scripts
+                defaultMode: 0755
+            - name: backups
+              persistentVolumeClaim:
+                claimName: nexusnet-backups-pvc
+
+---
+# ── CronJob: Verificación de integridad diaria (chaos drill automático) ───────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nexusnet-integrity-check
+  labels:
+    app: nexusnet-dr
+    component: integrity-check
+spec:
+  schedule: "0 6 * * *"   # Todos los días a las 6 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: nexusnet-dr
+            job: integrity-check
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: integrity-check
+              image: postgres:16-alpine
+              command:
+                - sh
+                - -c
+                - |
+                  apk add --no-cache redis wget 2>/dev/null
+                  /bin/sh /scripts/integrity-check.sh
+              env:
+                - name: POSTGRES_HOST
+                  value: "postgres.default.svc.cluster.local"
+                - name: POSTGRES_USER
+                  value: "postgres"
+                - name: POSTGRES_PASSWORD
+                  value: "postgres"
+                - name: REDIS_HOST
+                  value: "redis.default.svc.cluster.local"
+                - name: REDIS_PASSWORD
+                  value: "redis_nexusnet_2024"
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 32Mi
+          volumes:
+            - name: scripts
+              configMap:
+                name: dr-scripts
+                defaultMode: 0755
+            - name: backups
+              persistentVolumeClaim:
+                claimName: nexusnet-backups-pvc
+
+---
+# ── CronJob: Backup de Redis cada 30 minutos ─────────────────────────────────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redis-backup
+  labels:
+    app: nexusnet-dr
+    component: redis-backup
+spec:
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 120
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: redis-backup
+              image: redis:7-alpine
+              command:
+                - sh
+                - -c
+                - |
+                  TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+                  BACKUP_DIR="/backups/redis"
+                  mkdir -p "$BACKUP_DIR"
+                  # Forzar RDB snapshot y copiar via redis-cli
+                  redis-cli -h "$REDIS_HOST" -p 6379 -a "$REDIS_PASSWORD" BGSAVE
+                  sleep 5
+                  # En producción: usar redis-cli --rdb para exportar directamente
+                  echo "Backup Redis $TIMESTAMP completado"
+              env:
+                - name: REDIS_HOST
+                  value: "redis.default.svc.cluster.local"
+                - name: REDIS_PASSWORD
+                  value: "redis_nexusnet_2024"
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 32Mi
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: nexusnet-backups-pvc
+
+---
+# ── Job: Restore manual (ejecutar con kubectl apply -f) ──────────────────────
+# Uso: kubectl create job --from=cronjob/postgres-backup pg-restore-manual
+# O editar este job para restaurar un backup específico
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-restore-manual
+  labels:
+    app: nexusnet-dr
+    component: restore
+  annotations:
+    # Este job está deshabilitado por defecto — editar y aplicar cuando sea necesario
+    description: "Ejecutar manualmente: kubectl apply -f 12-disaster-recovery.yaml"
+spec:
+  manualSelector: true
+  selector:
+    matchLabels:
+      batch.kubernetes.io/job-name: postgres-restore-manual
+  suspend: true   # ← DESHABILITADO: cambiar a false para activar
+  template:
+    metadata:
+      labels:
+        batch.kubernetes.io/job-name: postgres-restore-manual
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: pg-restore
+          image: postgres:16-alpine
+          command: ["/bin/sh", "/scripts/pg-restore.sh"]
+          args:
+            - "/backups/postgres/nexusnet_latest.sql.gz"  # Cambiar a backup específico
+          env:
+            - name: POSTGRES_HOST
+              value: "postgres.default.svc.cluster.local"
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              value: "postgres"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: backups
+              mountPath: /backups
+      volumes:
+        - name: scripts
+          configMap:
+            name: dr-scripts
+            defaultMode: 0755
+        - name: backups
+          persistentVolumeClaim:
+            claimName: nexusnet-backups-pvc

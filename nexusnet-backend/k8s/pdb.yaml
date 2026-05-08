@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nexusnet-api
+  namespace: nexusnet
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: nexusnet-api

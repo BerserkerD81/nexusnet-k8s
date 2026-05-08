@@ -1,0 +1,17 @@
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: lan-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - __METALLB_RANGE__
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: lan-adv
+  namespace: metallb-system
+spec: {}
+
+# Replace __METALLB_RANGE__ with e.g. 192.168.1.240-192.168.1.250

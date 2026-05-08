@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  consul:
+    image: consul:1.14.4
+    command: agent -dev -client=0.0.0.0
+    ports:
+      - '8500:8500'
+      - '8600:8600/udp'
+    volumes:
+      - consul_data:/consul/data
+
+  pg1:
+    build: ./patroni-postgres
+    container_name: pg1
+    environment:
+      - PATRONI_NAME=pg1
+    volumes:
+      - patroni1_data:/var/lib/postgresql/data
+      - ./patroni-configs/pg1.yml:/etc/patroni.yml
+    ports:
+      - '15432:5432'
+
+  pg2:
+    build: ./patroni-postgres
+    container_name: pg2
+    environment:
+      - PATRONI_NAME=pg2
+    volumes:
+      - patroni2_data:/var/lib/postgresql/data
+      - ./patroni-configs/pg2.yml:/etc/patroni.yml
+
+  pg3:
+    build: ./patroni-postgres
+    container_name: pg3
+    environment:
+      - PATRONI_NAME=pg3
+    volumes:
+      - patroni3_data:/var/lib/postgresql/data
+      - ./patroni-configs/pg3.yml:/etc/patroni.yml
+
+  haproxy:
+    image: haproxy:2.6-alpine
+    ports:
+      - '5433:5432'
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - pg1
+      - pg2
+      - pg3
+
+volumes:
+  consul_data:
+  patroni1_data:
+  patroni2_data:
+  patroni3_data:

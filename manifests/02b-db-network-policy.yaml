@@ -1,0 +1,73 @@
+###############################################################################
+# NetworkPolicy — Replicación PostgreSQL y Redis Sentinel
+#
+# Define explícitamente qué pods pueden hablar con la BD y Redis.
+# Sin esto, cualquier pod del cluster puede conectarse a postgres:5432.
+###############################################################################
+
+# ── PostgreSQL: solo el backend y las réplicas pueden conectarse ───────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-replication-policy
+  labels:
+    app: postgres
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    # Permitir tráfico entre pods de postgres (streaming replication + pg_basebackup)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+    # Permitir tráfico del backend (escrituras al primary, lecturas a réplicas)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nexusnet-api
+      ports:
+        - port: 5432
+          protocol: TCP
+
+---
+# ── Redis: solo el backend y los sentinels pueden conectarse ───────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-ha-policy
+  labels:
+    app: redis
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    # Tráfico entre pods Redis (replicación master→replica)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+        - port: 26379
+          protocol: TCP
+    # Tráfico del backend (ioredis en modo Sentinel)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nexusnet-api
+      ports:
+        - port: 6379
+          protocol: TCP
+        - port: 26379
+          protocol: TCP

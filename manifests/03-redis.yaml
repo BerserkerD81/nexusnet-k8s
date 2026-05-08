@@ -1,0 +1,212 @@
+###############################################################################
+# Redis — Single node (desarrollo local)
+# Para producción usa 03-redis-prod.yaml (master + replicas + sentinels)
+###############################################################################
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-secret
+  labels:
+    app: redis
+type: Opaque
+stringData:
+  REDIS_PASSWORD: "redis_nexusnet_2024"
+
+---
+# Headless para que redis-master-0 sea resolvible por DNS
+# (el backend busca redis-master-0.redis-master-headless)
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-master-headless
+  labels:
+    app: redis
+spec:
+  clusterIP: None
+  ports:
+    - port: 6379
+      name: redis
+  selector:
+    app: redis
+
+---
+# Servicio principal — mismo nombre que en prod
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+      name: redis
+  selector:
+    app: redis
+
+---
+# redis-readonly apunta al mismo pod en dev (no hay réplicas)
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-readonly
+  labels:
+    app: redis
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+      name: redis
+  selector:
+    app: redis
+
+---
+# Sentinel FAKE — devuelve siempre redis-master-0 como master
+# El backend usa sentinel para descubrir el master; este pod lo simula.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel
+  labels:
+    app: redis-sentinel
+spec:
+  type: ClusterIP
+  ports:
+    - port: 26379
+      targetPort: 26379
+      name: sentinel
+  selector:
+    app: redis
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-master
+  labels:
+    app: redis
+spec:
+  serviceName: redis-master-headless
+  replicas: 1
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command:
+            - redis-server
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            - --appendonly
+            - "yes"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: REDIS_PASSWORD
+          ports:
+            - containerPort: 6379
+              name: redis
+            # Sentinel en el mismo pod — responde en 26379
+            # Simula sentinel para que el backend no necesite cambios
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a $REDIS_PASSWORD ping
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a $REDIS_PASSWORD ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+        - name: sentinel
+          image: redis:7-alpine
+          command:
+            - sh
+            - -c
+            - |
+              # Esperar a que redis esté listo antes de iniciar sentinel
+              until redis-cli -a $REDIS_PASSWORD ping 2>/dev/null | grep -q PONG; do
+                echo "Esperando redis..."; sleep 2
+              done
+              cp /sentinel-config/sentinel.conf /tmp/sentinel.conf
+              exec redis-sentinel /tmp/sentinel.conf
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: REDIS_PASSWORD
+          ports:
+            - containerPort: 26379
+              name: sentinel
+          volumeMounts:
+            - name: sentinel-config
+              mountPath: /sentinel-config
+            - name: redis-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+
+
+      volumes:
+        - name: sentinel-config
+          configMap:
+            name: redis-sentinel-config
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 512Mi
+
+---
+# ConfigMap con config mínima de sentinel apuntando al único pod
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-sentinel-config
+  labels:
+    app: redis
+data:
+  sentinel.conf: |
+    port 26379
+    # En entorno local headless DNS a veces falla; usar localhost en el mismo pod
+    sentinel monitor mymaster 127.0.0.1 6379 1
+    sentinel auth-pass mymaster redis_nexusnet_2024
+    sentinel down-after-milliseconds mymaster 5000
+    sentinel failover-timeout mymaster 10000
+    sentinel parallel-syncs mymaster 1

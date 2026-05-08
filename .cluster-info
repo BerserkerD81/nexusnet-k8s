@@ -1,0 +1,5 @@
+# Generado por setup-server.sh — vie 08 may 2026 12:48:26 -04
+SERVER_IP=172.17.32.23
+TOKEN=K10ebb49e3b69d7e686599689300d793307eb24c27d6d5bab598ad84da85c78d85d::server:ea2fb2194ea98daada38668df49a33ef
+DOMAIN=nexusnet.test
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml

@@ -1,0 +1,73 @@
+# Base pública para OAuth y el frontend. Sobrescribe con NGROK_URL si cambia.
+# Ej: NGROK_URL=https://nonmortally-phyletic-skyla.ngrok-free.dev docker compose up --build
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=nexusnet
+      - POSTGRES_USER=nexusnet
+      - POSTGRES_PASSWORD=change-me
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexusnet -d nexusnet"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - redisdata:/data
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: ../../nexusnet-backend
+      dockerfile: docker/Dockerfile.prod
+    image: nexusnet-api:local
+    environment:
+      - DATABASE_URL=postgresql://nexusnet:change-me@postgres:5432/nexusnet
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=change-me-please-16
+      - JWT_REFRESH_SECRET=change-me-too-16
+      - OAUTH_CALLBACK_BASE_URL=${NGROK_URL:-https://nonmortally-phyletic-skyla.ngrok-free.dev}
+      - GITHUB_CLIENT_ID=Ov23liFI9tnvdkQitqYL
+      - GITHUB_CLIENT_SECRET=7409fe30aec3c5c60f40a7887890997306cfb3a2
+      - GOOGLE_CLIENT_ID=67912357319-6uas1q4h6agjp9vgdg55dpjkn5eua68a.apps.googleusercontent.com
+      - GOOGLE_CLIENT_SECRET=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
+      - ADMIN_EMAIL=admin@local
+      - FRONTEND_URL=${NGROK_URL:-https://nonmortally-phyletic-skyla.ngrok-free.dev}
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=ChangeMe123!
+      - ADMIN_DISPLAY_NAME=NexusNet Admin
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+      args:
+        VITE_API_URL: ${NGROK_URL:-https://nonmortally-phyletic-skyla.ngrok-free.dev}
+    image: nexusnet-frontend:local
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:
+  redisdata:

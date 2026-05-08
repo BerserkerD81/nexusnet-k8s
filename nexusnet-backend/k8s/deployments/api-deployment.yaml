@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexusnet-api
+  namespace: nexusnet
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: nexusnet-api
+  template:
+    metadata:
+      labels:
+        app: nexusnet-api
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: bitnami/postgresql:16
+          command:
+            - sh
+            - -c
+            - until pg_isready -h postgres -p 5432 -U nexusnet -d nexusnet; do echo waiting for postgres; sleep 2; done
+      containers:
+        - name: api
+          image: nexusnet/api:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: nexusnet-config
+            - secretRef:
+                name: nexusnet-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3000
+            periodSeconds: 10

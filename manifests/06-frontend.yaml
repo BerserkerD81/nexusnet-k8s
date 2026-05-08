@@ -1,0 +1,80 @@
+###############################################################################
+# NexusNet Frontend — Deployment + Service
+###############################################################################
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexusnet-frontend
+  labels:
+    app: nexusnet-frontend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: nexusnet-frontend
+  template:
+    metadata:
+      labels:
+        app: nexusnet-frontend
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - nexusnet-frontend
+                topologyKey: "kubernetes.io/hostname"
+      containers:
+        - name: frontend
+          image: nexusnet-frontend:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /nginx-health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /nginx-health
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexusnet-frontend
+  labels:
+    app: nexusnet-frontend
+spec:
+  # ✅ ClusterIP es suficiente: Traefik Ingress maneja acceso externo
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 80
+      name: http
+  selector:
+    app: nexusnet-frontend

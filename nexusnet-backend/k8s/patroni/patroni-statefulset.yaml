@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: patroni
+spec:
+  serviceName: patroni
+  replicas: 3
+  selector:
+    matchLabels:
+      app: patroni
+  template:
+    metadata:
+      labels:
+        app: patroni
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: patroni
+          image: registry.opensource.zalan.do/acid/patroni:2.1
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - containerPort: 5432
+              name: postgresql
+            - containerPort: 8008
+              name: restapi
+          volumeMounts:
+            - name: pgdata
+              mountPath: /home/postgres/pgdata
+          readinessProbe:
+            httpGet:
+              path: /patroni
+              port: 8008
+            initialDelaySeconds: 10
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+        storageClassName: managed-standard
