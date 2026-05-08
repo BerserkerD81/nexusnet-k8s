@@ -1,4 +1,4 @@
-  #!/usr/bin/env bash
+#!/usr/bin/env bash
 # =============================================================================
 # NexusNet — k3s SERVER (control-plane + full stack)
 # =============================================================================
@@ -44,6 +44,30 @@ FRONTEND_SRC="$SCRIPT_DIR/nexusnet"
 BACKEND_SRC="$SCRIPT_DIR/nexusnet-backend"
 KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 TOKEN_FILE=/var/lib/rancher/k3s/server/node-token
+
+ensure_local_registry() {
+  local registry_name="nexusnet-registry"
+  local registry_port="5000"
+
+  if docker ps --format '{{.Names}}' | grep -qx "$registry_name"; then
+    info "Registry local ya está corriendo: ${SERVER_IP}:${registry_port}"
+    return 0
+  fi
+
+  if docker ps -a --format '{{.Names}}' | grep -qx "$registry_name"; then
+    info "Reiniciando registry local existente..."
+    docker start "$registry_name" >/dev/null
+  else
+    info "Levantando registry local en ${SERVER_IP}:${registry_port}..."
+    docker run -d \
+      --restart=always \
+      --name "$registry_name" \
+      -p "${registry_port}:5000" \
+      registry:2 >/dev/null
+  fi
+
+  success "Registry local listo en ${SERVER_IP}:${registry_port}"
+}
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo -e "${BOLD}${CYAN}"
@@ -201,7 +225,12 @@ for img in nexusnet-api:local nexusnet-frontend:local; do
 done
 success "Imágenes importadas en k3s"
 
-# Push a registry externo (opcional — necesario para que los nodos worker las usen)
+# Push a registry externo o local (necesario para que los nodos worker las usen)
+if [[ -z "$REGISTRY_HOST" ]]; then
+  REGISTRY_HOST="${SERVER_IP}:5000"
+  ensure_local_registry
+fi
+
 if [[ -n "$REGISTRY_HOST" ]]; then
   info "Pusheando imágenes a registry: $REGISTRY_HOST"
   docker tag nexusnet-api:local      "$REGISTRY_HOST/nexusnet-api:latest"
@@ -209,9 +238,6 @@ if [[ -n "$REGISTRY_HOST" ]]; then
   docker push "$REGISTRY_HOST/nexusnet-api:latest"      || warn "Fallo al pushear API"
   docker push "$REGISTRY_HOST/nexusnet-frontend:latest" || warn "Fallo al pushear frontend"
   success "Imágenes disponibles en $REGISTRY_HOST"
-else
-  warn "REGISTRY_HOST no definido → las imágenes solo existen en este nodo."
-  warn "Los workers necesitarán acceso al registry para correr pods. Ver sección de troubleshooting."
 fi
 
 # ── 6. Manifests Kubernetes ───────────────────────────────────────────────────
@@ -501,6 +527,7 @@ cat > "$SCRIPT_DIR/.cluster-info" << CLUSTEREOF
 SERVER_IP=$SERVER_IP
 TOKEN=$TOKEN
 DOMAIN=$DOMAIN
+REGISTRY_HOST=$REGISTRY_HOST
 KUBECONFIG=$KUBECONFIG
 CLUSTEREOF
 success "Info del cluster guardada en .cluster-info"

@@ -63,6 +63,11 @@ echo -e "  Labels     : ${BOLD}${NODE_LABELS:-ninguno}${NC}"
 echo -e "  Este nodo  : ${BOLD}$(hostname)  /  $(hostname -I | awk '{print $1}')${NC}"
 echo ""
 
+if [[ -z "$REGISTRY_HOST" && -n "$SERVER_IP" ]]; then
+  REGISTRY_HOST="${SERVER_IP}:5000"
+  info "REGISTRY_HOST no definido; usando el registry local del server: $REGISTRY_HOST"
+fi
+
 # ── Validaciones ──────────────────────────────────────────────────────────────
 step "1/4 Verificando prerequisitos"
 
